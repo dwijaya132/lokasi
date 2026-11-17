@@ -6,7 +6,6 @@
   <title>Live GPS Tracker</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
     html, body, #map-container { width: 100%; height: 100%; overflow: hidden; position: relative; }
@@ -257,7 +256,38 @@
 
     try {
       const mapEl = document.getElementById('map');
-      const canvas = await html2canvas(mapEl, { useCORS: true, allowTaint: false });
+      const mapRect = mapEl.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = mapRect.width * dpr;
+      canvas.height = mapRect.height * dpr;
+
+      const ctx = canvas.getContext('2d');
+      ctx.scale(dpr, dpr);
+      ctx.fillStyle = '#e5e3df';
+      ctx.fillRect(0, 0, mapRect.width, mapRect.height);
+
+      // Composite all visible Leaflet tiles at their exact screen positions
+      mapEl.querySelectorAll('.leaflet-tile-loaded').forEach(tile => {
+        const r = tile.getBoundingClientRect();
+        ctx.drawImage(tile, r.left - mapRect.left, r.top - mapRect.top, r.width, r.height);
+      });
+
+      // Draw location dot & pulse ring at current coordinates
+      const pt = map.latLngToContainerPoint([currentLat, currentLng]);
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 18, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(26, 115, 232, 0.25)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 8, 0, Math.PI * 2);
+      ctx.fillStyle = '#1a73e8';
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
       const file = new File([blob], `location-${Date.now()}.png`, { type: 'image/png' });
 
