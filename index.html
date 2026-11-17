@@ -164,12 +164,12 @@
     currentLng = lng;
     locationSource = source;
     marker.setLatLng([lat, lng]);
-    map.setView([lat, lng], source === "GPS" ? 17 : 13);
+    map.setView([lat, lng], source === "GPS" ? 17 : (source === "WIFI" ? 16 : 13));
 
     const badge = document.getElementById('mode-badge');
     const text = document.getElementById('status-text');
     badge.textContent = source.toUpperCase();
-    badge.className = 'badge ' + (source === 'GPS' ? 'gps' : 'ip');
+    badge.className = 'badge ' + (source === 'GPS' || source === 'WIFI' ? 'gps' : 'ip');
     text.innerHTML = `<b>Coords:</b> ${lat.toFixed(6)}, ${lng.toFixed(6)}<br>${accuracyText}`;
   }
 
@@ -195,16 +195,31 @@
         updatePosition(pos.coords.latitude, pos.coords.longitude, "GPS", `Accuracy: ±${acc}m (Live)`);
       },
       (err) => {
-        badge.textContent = "GPS BLOCKED";
-        badge.className = "badge err";
-        let reason = "Permission denied.";
-        if (err.code === 1) reason = "GPS denied or blocked by Google Sites iframe sandbox.";
-        else if (err.code === 2) reason = "GPS signal unavailable.";
-        else if (err.code === 3) reason = "GPS request timed out.";
-        text.innerHTML = `${reason} Using IP estimation fallback.`;
+        if (err.code === 1) {
+          badge.textContent = "BLOCKED";
+          badge.className = "badge err";
+          text.innerHTML = "Location permission denied. Using IP estimation.";
+          fallbackIP();
+        } else {
+          text.textContent = "Hardware GPS unavailable. Trying OS Wi-Fi positioning...";
+          requestWifiLocation();
+        }
+      },
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }
+    );
+  }
+
+  function requestWifiLocation() {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const acc = Math.round(pos.coords.accuracy);
+        updatePosition(pos.coords.latitude, pos.coords.longitude, "WIFI", `Accuracy: ±${acc}m (Wi-Fi/OS)`);
+      },
+      () => {
+        document.getElementById('status-text').innerHTML = "OS Location off/unavailable. Using IP estimate.";
         fallbackIP();
       },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 30000 }
     );
   }
 
@@ -246,21 +261,28 @@
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
       const file = new File([blob], `location-${Date.now()}.png`, { type: 'image/png' });
 
-      // Mobile Native Share (Supports sending Image + Text directly to WhatsApp)
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+      if (isMobile && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
           title: 'Current Location',
           text: message
         });
       } else {
-        // Desktop Fallback: Download screenshot + open WhatsApp Web with text
-        const link = document.createElement('a');
-        link.href = canvas.toDataURL('image/png');
-        link.download = `location-${Date.now()}.png`;
-        link.click();
+        // Desktop: Copy PNG to clipboard + open WhatsApp Web
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          document.getElementById('status-text').innerHTML += `<br><b style="color:#188038;">✓ Map copied! Press Ctrl+V in WhatsApp.</b>`;
+        } catch (clipErr) {
+          // Fallback to download if clipboard permission is blocked
+          const link = document.createElement('a');
+          link.href = canvas.toDataURL('image/png');
+          link.download = `location-${Date.now()}.png`;
+          link.click();
+        }
 
-        const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+        const waUrl = `https://web.whatsapp.com/send?text=${encodeURIComponent(message)}`;
         window.open(waUrl, '_blank');
       }
     } catch (err) {
