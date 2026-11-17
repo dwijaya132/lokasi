@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live GPS Tracker</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    html, body, #map-container { width: 100%; height: 100%; overflow: hidden; position: relative; }
+    #map { width: 100%; height: 100%; z-index: 1; }
+
+    /* Blinking Location Dot */
+    .blinking-dot {
+      width: 16px; height: 16px;
+      background: #1a73e8;
+      border: 3px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 0 8px rgba(0,0,0,0.4);
+      position: relative;
+    }
+    .blinking-dot::after {
+      content: "";
+      position: absolute;
+      top: -9px; left: -9px;
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: rgba(26, 115, 232, 0.45);
+      animation: pulse 1.5s infinite ease-out;
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.5); opacity: 1; }
+      100% { transform: scale(2.2); opacity: 0; }
+    }
+
+    /* Top-Left Permission & Limitation Menu */
+    .status-panel {
+      position: absolute; top: 12px; left: 12px; z-index: 1000;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 10px 12px; border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      max-width: 270px; font-size: 12px; color: #222;
+    }
+    .status-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: 4px; }
+    .badge { padding: 2px 6px; border-radius: 4px; font-size: 10px; color: #fff; background: #666; }
+    .badge.gps { background: #188038; }
+    .badge.ip { background: #e37400; }
+    .badge.err { background: #d93025; }
+    .status-info { color: #555; line-height: 1.35; margin-bottom: 6px; }
+    .menu-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .btn-small {
+      background: #1a73e8; color: #fff; border: none;
+      padding: 5px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;
+    }
+    .btn-small.secondary { background: #f1f3f4; color: #333; border: 1px solid #ccc; }
+    .btn-small:hover { opacity: 0.9; }
+
+    /* Top-Right WhatsApp Share Button */
+    .wa-btn {
+      position: absolute; top: 12px; right: 12px; z-index: 1000;
+      background: #25D366; color: #fff; border: none;
+      border-radius: 50px; padding: 10px 14px;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.25);
+      transition: transform 0.15s ease;
+    }
+    .wa-btn:hover { transform: scale(1.04); background: #20bd5a; }
+    .wa-btn:disabled { background: #95d5b2; cursor: wait; }
+
+    /* Bottom-Right Pan & Zoom Toolbox */
+    .toolbox {
+      position: absolute; bottom: 20px; right: 12px; z-index: 1000;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 6px; border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+      display: grid; grid-template-columns: repeat(3, 28px); gap: 3px;
+    }
+    .tool-btn {
+      width: 28px; height: 28px; border: 1px solid #ddd;
+      background: #fff; border-radius: 4px; cursor: pointer;
+      font-size: 13px; font-weight: bold; color: #333;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tool-btn:hover { background: #f0f0f0; }
+    .tool-btn:active { background: #e0e0e0; }
+  </style>
+</head>
+<body>
+
+<div id="map-container">
+  <!-- Permission & Status Menu -->
+  <div class="status-panel" id="status-panel">
+    <div class="status-header">
+      <span>Location Status</span>
+      <span class="badge" id="mode-badge">INIT</span>
+    </div>
+    <div class="status-info" id="status-text">Initializing location services...</div>
+    <div class="menu-actions">
+      <button class="btn-small" id="btn-allow-gps" onclick="requestGPS()">Allow / Retry GPS</button>
+      <button class="btn-small secondary" id="btn-fallback-ip" onclick="fallbackIP()">Use IP Estimate</button>
+    </div>
+  </div>
+
+  <!-- Top-Right WhatsApp Share Button -->
+  <button class="wa-btn" id="wa-share-btn" onclick="shareToWhatsApp()" title="Send Location & Screenshot to WhatsApp">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12.031 6.172c-3.181 0-5.767 2.586-5.768 5.766-.001 1.298.38 2.27 1.019 3.287l-.582 2.128 2.182-.573c.978.58 1.911.928 3.145.929 3.178 0 5.767-2.587 5.768-5.766.001-3.187-2.575-5.77-5.764-5.771zm3.392 8.244c-.144.405-.837.774-1.17.824-.299.045-.677.063-1.092-.069-.252-.08-.575-.187-.988-.365-1.739-.751-2.874-2.502-2.961-2.617-.087-.116-.708-.94-.708-1.793s.448-1.273.607-1.446c.159-.173.346-.217.462-.217l.332.006c.106.005.249-.04.39.298.144.347.491 1.2.534 1.287.043.087.072.188.014.304-.058.116-.087.188-.173.289l-.26.304c-.087.086-.177.18-.076.354.101.174.449.741.964 1.201.662.591 1.221.774 1.394.86s.274.072.376-.043c.101-.116.433-.506.549-.68.116-.173.231-.145.39-.087s1.011.477 1.184.564.289.13.332.202c.045.072.045.419-.1.824z"/>
+      <path d="M12 0C5.373 0 0 5.373 0 12c0 2.625.846 5.059 2.284 7.034L.789 23.49l4.619-1.465A11.94 11.94 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.77 9.77 0 01-4.985-1.365l-.357-.212-3.711 1.177 1.196-3.619-.233-.371A9.775 9.775 0 012.182 12C2.182 6.586 6.586 2.182 12 2.182S21.818 6.586 21.818 12 17.414 21.818 12 21.818z"/>
+    </svg>
+    <span>WhatsApp</span>
+  </button>
+
+  <!-- Map Canvas -->
+  <div id="map"></div>
+
+  <!-- Pan & Zoom Toolbox -->
+  <div class="toolbox" title="Map Controls">
+    <button class="tool-btn" onclick="map.zoomIn()" title="Zoom In">+</button>
+    <button class="tool-btn" onclick="panMap(0, -100)" title="Pan Up">↑</button>
+    <button class="tool-btn" onclick="map.zoomOut()" title="Zoom Out">−</button>
+    <button class="tool-btn" onclick="panMap(-100, 0)" title="Pan Left">←</button>
+    <button class="tool-btn" onclick="recenterMap()" title="Center on Dot">◎</button>
+    <button class="tool-btn" onclick="panMap(100, 0)" title="Pan Right">→</button>
+    <div></div>
+    <button class="tool-btn" onclick="panMap(0, 100)" title="Pan Down">↓</button>
+    <div></div>
+  </div>
+</div>
+
+<script>
+  let currentLat = -6.2088; // Default fallback (Jakarta)
+  let currentLng = 106.8456;
+  let locationSource = "Default";
+  let watchId = null;
+
+  // Initialize Leaflet Map (Swipe/Touch pan & pinch-zoom enabled by default)
+  const map = L.map('map', {
+    center: [currentLat, currentLng],
+    zoom: 15,
+    zoomControl: false // Replaced by custom toolbox
+  });
+
+  // Google Maps Tile Layer with CORS enabled for html2canvas
+  L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+    maxZoom: 20,
+    crossOrigin: 'anonymous',
+    attribution: '© Google Maps'
+  }).addTo(map);
+
+  // Blinking Marker
+  const blinkingIcon = L.divIcon({
+    className: '',
+    html: '<div class="blinking-dot"></div>',
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  });
+  const marker = L.marker([currentLat, currentLng], { icon: blinkingIcon }).addTo(map);
+
+  function updatePosition(lat, lng, source, accuracyText = "") {
+    currentLat = lat;
+    currentLng = lng;
+    locationSource = source;
+    marker.setLatLng([lat, lng]);
+    map.setView([lat, lng], source === "GPS" ? 17 : 13);
+
+    const badge = document.getElementById('mode-badge');
+    const text = document.getElementById('status-text');
+    badge.textContent = source.toUpperCase();
+    badge.className = 'badge ' + (source === 'GPS' ? 'gps' : 'ip');
+    text.innerHTML = `<b>Coords:</b> ${lat.toFixed(6)}, ${lng.toFixed(6)}<br>${accuracyText}`;
+  }
+
+  // 1. Primary: Request Phone/Browser GPS
+  function requestGPS() {
+    const badge = document.getElementById('mode-badge');
+    const text = document.getElementById('status-text');
+
+    if (!("geolocation" in navigator)) {
+      badge.textContent = "NO GPS";
+      badge.className = "badge err";
+      text.textContent = "Browser does not support GPS. Switching to IP estimate...";
+      fallbackIP();
+      return;
+    }
+
+    text.textContent = "Requesting GPS permission...";
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+
+    watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const acc = Math.round(pos.coords.accuracy);
+        updatePosition(pos.coords.latitude, pos.coords.longitude, "GPS", `Accuracy: ±${acc}m (Live)`);
+      },
+      (err) => {
+        badge.textContent = "GPS BLOCKED";
+        badge.className = "badge err";
+        let reason = "Permission denied.";
+        if (err.code === 1) reason = "GPS denied or blocked by Google Sites iframe sandbox.";
+        else if (err.code === 2) reason = "GPS signal unavailable.";
+        else if (err.code === 3) reason = "GPS request timed out.";
+        text.innerHTML = `${reason} Using IP estimation fallback.`;
+        fallbackIP();
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  }
+
+  // 2. Fallback: IP-Based Location Estimation
+  async function fallbackIP() {
+    try {
+      const res = await fetch('https://ipwho.is/');
+      const data = await res.json();
+      if (data.success) {
+        updatePosition(data.latitude, data.longitude, "IP EST", `Estimated via IP (${data.city}, ${data.country_code})`);
+      } else {
+        throw new Error("IP lookup failed");
+      }
+    } catch (e) {
+      document.getElementById('status-text').textContent = "Unable to fetch IP estimate. Check network.";
+    }
+  }
+
+  // Toolbox Controls
+  function panMap(x, y) { map.panBy([x, y]); }
+  function recenterMap() { map.setView([currentLat, currentLng], map.getZoom()); }
+
+  // 3. Capture Screenshot & Share to WhatsApp
+  async function shareToWhatsApp() {
+    const btn = document.getElementById('wa-share-btn');
+    btn.disabled = true;
+    btn.querySelector('span').textContent = 'Capturing...';
+
+    const timestamp = new Date().toLocaleString();
+    const gmapsLink = `https://www.google.com/maps?q=${currentLat},${currentLng}`;
+    const message = `📍 *Current Location (${locationSource})*\n` +
+                    `Lat/Lng: ${currentLat.toFixed(6)}, ${currentLng.toFixed(6)}\n` +
+                    `Map: ${gmapsLink}\n` +
+                    `🕒 Timestamp: ${timestamp}`;
+
+    try {
+      const mapEl = document.getElementById('map');
+      const canvas = await html2canvas(mapEl, { useCORS: true, allowTaint: false });
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const file = new File([blob], `location-${Date.now()}.png`, { type: 'image/png' });
+
+      // Mobile Native Share (Supports sending Image + Text directly to WhatsApp)
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: 'Current Location',
+          text: message
+        });
+      } else {
+        // Desktop Fallback: Download screenshot + open WhatsApp Web with text
+        const link = document.createElement('a');
+        link.href = canvas.toDataURL('image/png');
+        link.download = `location-${Date.now()}.png`;
+        link.click();
+
+        const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+        window.open(waUrl, '_blank');
+      }
+    } catch (err) {
+      // If screenshot fails due to browser restrictions, still send coordinates & timestamp
+      const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+      window.open(waUrl, '_blank');
+    } finally {
+      btn.disabled = false;
+      btn.querySelector('span').textContent = 'WhatsApp';
+    }
+  }
+
+  // Start on load
+  requestGPS();
+</script>
+</body>
+</html>
